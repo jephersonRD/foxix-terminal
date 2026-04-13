@@ -323,7 +323,7 @@ check_deps() {
     local found=false
     case "$PKG_MANAGER" in
       pacman)
-        if pacman -Qs "^${pkg}$" &> /dev/null || pacman -Qs "${pkg}-" &> /dev/null; then
+        if pacman -Qs "$pkg" &> /dev/null; then
           found=true
         fi
         ;;
@@ -496,13 +496,6 @@ StartupNotify=true
 StartupWMClass=foxix-terminal
 EOF
 
-  local xdg_dir="$HOME/.config/autostart"
-  if [ -d "$xdg_dir" ]; then
-    ln -sf "$desktop_file" "$xdg_dir/foxix.desktop" 2>/dev/null || true
-  fi
-  
-  update-desktop-database "$desktop_dir" 2>/dev/null || gtk-update-icon-cache -t -f "$icon_dir" 2>/dev/null || true
-  
   echo -e "${GREEN}✓ Aplicación instalada en menú${NC}"
   echo -e "${DIM}Ubicación: $desktop_file${NC}"
 }
