@@ -2,14 +2,16 @@
 
 <img src="assets/logo/logo.png" alt="Foxix Logo" width="120">
 
-```
+<p align="center">
+<pre>
 ███████╗ ██████╗ ██╗  ██╗██╗██╗  ██╗
 ██╔════╝██╔═══██╗╚██╗██╔╝██║╚██╗██╔╝
 █████╗  ██║   ██║ ╚███╔╝ ██║ ╚███╔╝ 
 ██╔══╝  ██║   ██║ ██╔██╗ ██║ ██╔██╗ 
 ██║     ╚██████╔╝██╔╝ ██╗██║██╔╝ ██╗
 ╚═╝      ╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝
-```
+</pre>
+</p>
 
 **Foxix** — Emulador de terminal ultra-rápido escrito en Rust 🦀
 
@@ -143,7 +145,7 @@ Optimizado para **Hyprland**, **Sway**, **GNOME Wayland**.
 
 ## 📄 Licencia
 
-MIT © 2026 — Foxix Terminal
+[MIT © 2026 — Foxix Terminal](LICENSE)
 
 ---
 
