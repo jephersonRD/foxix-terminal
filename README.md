@@ -40,7 +40,7 @@ Si buscas un **terminal rápido para Linux**, una terminal en Rust**, o un reemp
 
 ---
 
-## ⚡ Rendimiento — Foxix vs Kitty vs Alacritty
+##  Rendimiento — Foxix vs Kitty vs Alacritty
 
 Foxix está diseñado para ser el terminal más eficiente disponible en Linux. Benchmarks reales comparando **Foxix terminal** con los emuladores más populares:
 
@@ -60,16 +60,16 @@ Foxix está diseñado para ser el terminal más eficiente disponible en Linux. B
 
 ---
 
-## 🚀 Características de Foxix Terminal
+##  Características de Foxix Terminal
 
 - 🦊 **Renderizado GPU** — OpenGL 4.6 con cell-sprites para máxima velocidad
-- 🎨 **Transparencia real** — fondo semitransparente que muestra el wallpaper
-- 🔤 **Nerd Fonts** — iconos completos con fuentes Nerd Font patched
-- 🖱️ **Selección con mouse** — drag-to-select nativo
-- 📋 **Wayland clipboard** — integración con `wl-copy` / `wl-paste`
-- 🌈 **True color 24-bit** — soporte completo de 16M colores
-- 📜 **Scrollback 10k líneas** — configurable
-- ⚙️ **Config estilo Kitty** — migración sencilla desde `kitty.conf`
+-  **Transparencia real** — fondo semitransparente que muestra el wallpaper
+-  **Nerd Fonts** — iconos completos con fuentes Nerd Font patched
+-  **Selección con mouse** — drag-to-select nativo
+-  **Wayland clipboard** — integración con `wl-copy` / `wl-paste`
+-  **True color 24-bit** — soporte completo de 16M colores
+-  **Scrollback 10k líneas** — configurable
+-  **Config estilo Kitty** — migración sencilla desde `kitty.conf`
 - 🦀 **100% Rust** — sin Python, sin runtime externo, sin sorpresas
 
 ---
