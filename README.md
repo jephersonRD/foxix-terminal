@@ -71,6 +71,13 @@ Foxix está diseñado para ser el terminal más eficiente disponible en Linux. B
 -  **Scrollback 10k líneas** — configurable
 -  **Config estilo Kitty** — migración sencilla desde `kitty.conf`
 - 🦀 **100% Rust** — sin Python, sin runtime externo, sin sorpresas
+---
+
+ ### 🎨 Preview
+<p align="center">
+  <img src="assets/UI/1.png" alt="Foxix UI 1" width="45%">
+  <img src="assets/UI/2.png" alt="Foxix UI 2" width="45%">
+</p>
 
 ---
 
