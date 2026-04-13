@@ -296,45 +296,59 @@ check_deps() {
   echo -e "${CYAN}$(t "checking_deps")${NC}\n"
 
   local missing=()
-  local deps=()
+  local pkgs=()
 
   case "$PKG_MANAGER" in
     pacman)
-      deps=("freetype2" "wayland")
+      pkgs=("freetype2" "wayland")
       ;;
     apt)
-      deps=("libfreetype-dev" "libwayland-dev")
+      pkgs=("libfreetype-dev" "libwayland-dev")
       ;;
     dnf)
-      deps=("freetype-devel" "wayland-devel")
+      pkgs=("freetype-devel" "wayland-devel")
       ;;
     zypper)
-      deps=("freetype2-devel" "wayland-devel")
+      pkgs=("freetype2-devel" "wayland-devel")
       ;;
     xbps)
-      deps=("freetype" "wayland")
+      pkgs=("freetype" "wayland")
       ;;
     *)
-      deps=("freetype" "wayland")
+      pkgs=("freetype" "wayland")
       ;;
   esac
 
-  for dep in "${deps[@]}"; do
-    if command -v "$dep" &> /dev/null || [ -f "/usr/bin/$dep" ] || [ -f "/usr/local/bin/$dep" ]; then
-      echo -e "${GREEN}  ✓ $dep${NC}"
-    else
-      local installed=false
-      for bin in /usr/bin/* /usr/local/bin/*; do
-        if [ -f "$bin" ] && [[ "$(basename "$bin")" == "$dep"* ]]; then
-          installed=true
-          echo -e "${GREEN}  ✓ $dep${NC}"
-          break
+  for pkg in "${pkgs[@]}"; do
+    local found=false
+    case "$PKG_MANAGER" in
+      pacman)
+        if pacman -Qs "^${pkg}$" &> /dev/null || pacman -Qs "${pkg}-" &> /dev/null; then
+          found=true
         fi
-      done
-      if [ "$installed" = false ]; then
-        echo -e "${RED}  ✗ $dep${NC}"
-        missing+=("$dep")
-      fi
+        ;;
+      apt)
+        if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+          found=true
+        fi
+        ;;
+      dnf)
+        if rpm -q "$pkg" &> /dev/null; then
+          found=true
+        fi
+        ;;
+      *)
+        if [ -f "/usr/lib/lib${pkg}.so" ] || [ -f "/usr/lib64/lib${pkg}.so" ] || [ -f "/usr/lib/x86_64-linux-gnu/lib${pkg}.so" ]; then
+          found=true
+        fi
+        ;;
+    esac
+    
+    if [ "$found" = true ]; then
+      echo -e "${GREEN}  ✓ $pkg${NC}"
+    else
+      echo -e "${RED}  ✗ $pkg${NC}"
+      missing+=("$pkg")
     fi
   done
 
@@ -449,24 +463,25 @@ make_link() {
 install_desktop_entry() {
   echo -e "${CYAN}Instalando en menú de aplicaciones...${NC}"
   
-  local icon_dir="/usr/local/share/icons/hicolor/256x256/apps"
-  local desktop_dir="/usr/local/share/applications"
+  local icon_dir="$HOME/.local/share/icons/hicolor/256x256/apps"
+  local desktop_dir="$HOME/.local/share/applications"
   local desktop_file="$desktop_dir/foxix.desktop"
+  local icon_path="$icon_dir/foxix.png"
   
-  sudo mkdir -p "$icon_dir"
-  sudo mkdir -p "$desktop_dir"
+  mkdir -p "$icon_dir"
+  mkdir -p "$desktop_dir"
   
   if [ -f "$INSTALL_DIR/foxix/assets/logo/logo.png" ]; then
-    sudo cp "$INSTALL_DIR/foxix/assets/logo/logo.png" "$icon_dir/foxix.png"
+    cp "$INSTALL_DIR/foxix/assets/logo/logo.png" "$icon_path"
   elif [ -f "$INSTALL_DIR/foxix/logo.png" ]; then
-    sudo cp "$INSTALL_DIR/foxix/logo.png" "$icon_dir/foxix.png"
+    cp "$INSTALL_DIR/foxix/logo.png" "$icon_path"
+  elif [ -f "$HOME/.local/foxix/foxix/assets/logo/logo.png" ]; then
+    cp "$HOME/.local/foxix/foxix/assets/logo/logo.png" "$icon_path"
   fi
   
-  sudo rm -f "$desktop_file"
+  rm -f "$desktop_file"
   
-  local icon_path="/usr/local/share/icons/hicolor/256x256/apps/foxix.png"
-  
-  cat | sudo tee "$desktop_file" > /dev/null << EOF
+  cat > "$desktop_file" << EOF
 [Desktop Entry]
 Name=Foxix
 GenericName=Terminal
@@ -481,15 +496,21 @@ StartupNotify=true
 StartupWMClass=foxix-terminal
 EOF
 
-  sudo update-desktop-database "$desktop_dir" 2>/dev/null || true
+  local xdg_dir="$HOME/.config/autostart"
+  if [ -d "$xdg_dir" ]; then
+    ln -sf "$desktop_file" "$xdg_dir/foxix.desktop" 2>/dev/null || true
+  fi
+  
+  update-desktop-database "$desktop_dir" 2>/dev/null || gtk-update-icon-cache -t -f "$icon_dir" 2>/dev/null || true
   
   echo -e "${GREEN}✓ Aplicación instalada en menú${NC}"
+  echo -e "${DIM}Ubicación: $desktop_file${NC}"
 }
 
 remove_desktop_entry() {
-  sudo rm -f "/usr/local/share/applications/foxix.desktop"
-  sudo rm -f "/usr/local/share/icons/hicolor/256x256/apps/foxix.png"
-  sudo update-desktop-database "/usr/local/share/applications" 2>/dev/null || true
+  rm -f "$HOME/.local/share/applications/foxix.desktop"
+  rm -f "$HOME/.local/share/icons/hicolor/256x256/apps/foxix.png"
+  update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 }
 
 do_install() {
