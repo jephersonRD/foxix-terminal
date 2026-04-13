@@ -75,8 +75,8 @@ Foxix está diseñado para ser el terminal más eficiente disponible en Linux. B
 
  ### 🎨 Preview
 <p align="center">
-  <img src="assets/UI/1.png" alt="Foxix UI 1" width="45%">
-  <img src="assets/UI/2.png" alt="Foxix UI 2" width="45%">
+  <img src="assets/UI/1.png" alt="Foxix UI 1" width="50%">
+  <img src="assets/UI/2.png" alt="Foxix UI 2" width="50%">
 </p>
 
 ---
