@@ -83,7 +83,25 @@ Foxix está diseñado para ser el terminal más eficiente disponible en Linux. B
 
 ## 📦 Instalación de Foxix
 
-### Desde código fuente (recomendado)
+### 🚀 Instalación rápida (binario pre-compilado)
+
+```bash
+# Descargar e instalar con un solo comando
+curl -sL https://github.com/tu-usuario/foxix/releases/latest/download/foxix-install.sh | bash
+```
+
+O manualmente:
+```bash
+# Descargar el tarball
+wget https://github.com/tu-usuario/foxix/releases/latest/download/foxix-0.1.0-linux-x86_64.tar.gz
+
+# Extraer e instalar
+tar -xf foxix-0.1.0-linux-x86_64.tar.gz
+cd foxix-0.1.0
+sudo ./install.sh
+```
+
+### 🛠️ Desde código fuente
 
 ```bash
 # Clonar el repositorio de Foxix

@@ -1,0 +1,1087 @@
+use freetype::Library;
+use freetype::Face;
+use freetype::freetype;
+use freetype::{Bitmap, FtResult, Glyph};
+use std::collections::HashMap;
+
+use crate::terminal::buffer::{CellAttributes, ScreenBuffer};
+use crate::terminal::cursor::Cursor;
+use anyhow::Result;
+use gl::types::*;
+use std::f32;
+use std::ptr;
+
+// Vertex shader
+const VERTEX_SHADER: &str = r#"#version 330 core
+in vec2 aPosition;
+in vec2 aTexCoord;  
+in vec4 aColor;
+
+out vec2 TexCoord;
+out vec4 VertexColor;
+
+uniform vec2 uCellSize;
+uniform vec2 uScreenSize;
+
+void main() {
+    vec2 pos = aPosition;
+    pos.y = uScreenSize.y - pos.y;
+    gl_Position = vec4(
+        (pos.x / uScreenSize.x) * 2.0 - 1.0,
+        1.0 - (pos.y / uScreenSize.y) * 2.0 - 1.0,
+        0.0,
+        1.0
+    );
+    TexCoord = aTexCoord;
+    VertexColor = aColor;
+}
+"#;
+
+// Fragment shader  
+const FRAGMENT_SHADER: &str = r#"#version 330 core
+in vec2 TexCoord;
+in vec4 VertexColor;
+
+out vec4 FragColor;
+
+uniform sampler2D uTexture;
+uniform bool uHasTexture;
+
+void main() {
+    if (uHasTexture) {
+        float alpha = texture(uTexture, TexCoord).r;
+        FragColor = vec4(VertexColor.rgb, VertexColor.a * alpha);
+    } else {
+        FragColor = VertexColor;
+    }
+}
+"#;
+
+pub struct GpuRenderer {
+    program: GLuint,
+    vao: GLuint,
+    vbo: GLuint,
+    ebo: GLuint,
+    cols: usize,
+    rows: usize,
+    cell_width: f32,
+    cell_height: f32,
+    window_width: f32,
+    window_height: f32,
+    cell_size_loc: GLint,
+    screen_size_loc: GLint,
+    texture_loc: GLint,
+    has_texture_loc: GLint,
+    texture_id: GLuint,
+    freetype: Option<Library>,
+    font_cache: HashMap<char, Glyph>,
+    font_size: u32,
+    font_face: Option<Face>,
+}
+
+impl GpuRenderer {
+    pub fn new(
+        cell_width: f32,
+        cell_height: f32,
+        cols: usize,
+        rows: usize,
+        window_width: u32,
+        window_height: u32,
+    ) -> Result<Self> {
+        // Initialize FreeType
+        let freetype_lib = match Library::init() {
+            Ok(lib) => Some(lib),
+            Err(_) => None,
+        };
+
+        unsafe {
+            gl::Enable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+
+            let program = Self::create_shader_program(VERTEX_SHADER, FRAGMENT_SHADER)?;
+
+            let mut vao: GLuint = 0;
+            let mut vbo: GLuint = 0;
+            let mut ebo: GLuint = 0;
+
+            gl::GenVertexArrays(1, &mut vao);
+            gl::GenBuffers(1, &mut vbo);
+            gl::GenBuffers(1, &mut ebo);
+
+            let stride = 8 * std::mem::size_of::<GLfloat>() as GLsizei;
+            let offset = |i: usize| (i * std::mem::size_of::<GLfloat>()) as *const _;
+
+            gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, stride, offset(0));
+            gl::EnableVertexAttribArray(0);
+            gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, stride, offset(2));
+            gl::EnableVertexAttribArray(1);
+            gl::VertexAttribPointer(2, 4, gl::FLOAT, gl::FALSE, stride, offset(4));
+            gl::EnableVertexAttribArray(2);
+
+            gl::BindVertexArray(vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
+
+            let mut tex: GLuint = 0;
+            gl::GenTextures(1, &mut tex);
+            gl::BindTexture(gl::TEXTURE_2D, tex);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+
+            let cell_size_loc =
+                gl::GetUniformLocation(program, b"uCellSize\0".as_ptr() as *const _);
+            let screen_size_loc =
+                gl::GetUniformLocation(program, b"uScreenSize\0".as_ptr() as *const _);
+            let texture_loc = gl::GetUniformLocation(program, b"uTexture\0".as_ptr() as *const _);
+            let has_texture_loc =
+                gl::GetUniformLocation(program, b"uHasTexture\0".as_ptr() as *const _);
+
+            Ok(Self {
+                program,
+                vao,
+                vbo,
+                ebo,
+                cols,
+                rows,
+                cell_width,
+                cell_height,
+                window_width: window_width as f32,
+                window_height: window_height as f32,
+                cell_size_loc,
+                screen_size_loc,
+                texture_loc,
+                has_texture_loc,
+                texture_id: tex,
+                freetype: freetype_lib,
+                font_cache: HashMap::new(),
+                font_size: 16,
+                font_face: None,
+            })
+        }
+    }
+}
+
+unsafe fn create_shader(type_: GLenum, source: &str) -> Result<GLuint> {
+    let shader = gl::CreateShader(type_);
+    let c_source = std::ffi::CString::new(source).unwrap();
+    gl::ShaderSource(shader, 1, &c_source.as_ptr(), std::ptr::null());
+    gl::CompileShader(shader);
+
+    let mut status: GLint = 0;
+    gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut status);
+    if status == 0 {
+        let mut len: GLint = 0;
+        gl::GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut len);
+        let mut log = vec![0u8; len as usize];
+        gl::GetShaderInfoLog(
+            shader,
+            len,
+            std::ptr::null_mut(),
+            log.as_mut_ptr() as *mut _;
+        );
+        let msg = String::from_utf8_unchecked(log);
+        anyhow::bail!("Shader compilation failed: {}", msg);
+    }
+
+    Ok(shader)
+}
+
+unsafe fn create_shader_program(vs: &str, fs: &str) -> Result<GLuint> {
+    let vertex_shader = Self::create_shader(gl::VERTEX_SHADER, vs)?;
+    let fragment_shader = Self::create_shader(gl::FRAGMENT_SHADER, fs)?;
+
+    let program = gl::CreateProgram();
+    gl::AttachShader(program, vertex_shader);
+    gl::AttachShader(program, fragment_shader);
+    gl::LinkProgram(program);
+
+    let mut status: GLint = 0;
+    gl::GetProgramiv(program, gl::LINK_STATUS, &mut status);
+    if status == 0 {
+        let mut len: GLint = 0;
+        gl::GetProgramiv(program, gl::INFO_LOG_LENGTH, &mut len);
+        let mut log = vec![0u8; len as usize];
+        gl::GetProgramInfoLog(
+            program,
+            len,
+            std::ptr::null_mut(),
+            log.as_mut_ptr() as *mut _;
+        );
+        let msg = String::from_utf8_unchecked(log);
+        anyhow::bail!("Program linking failed: {}", msg);
+    }
+
+    gl::DeleteShader(vertex_shader);
+    gl::DeleteShader(fragment_shader);
+
+    Ok(program)
+}
+"#;
+
+// Fragment shader  
+const FRAGMENT_SHADER: &str = r#"#version 330 core
+in vec2 TexCoord;
+in vec4 VertexColor;
+
+out vec4 FragColor;
+
+uniform sampler2D uTexture;
+uniform bool uHasTexture;
+
+void main() {
+    if (uHasTexture) {
+        float alpha = texture(uTexture, TexCoord).r;
+        FragColor = vec4(VertexColor.rgb, VertexColor.a * alpha);
+    } else {
+        FragColor = VertexColor;
+    }
+}
+"#;
+
+pub struct GpuRenderer {
+    program: GLuint,
+    vao: GLuint,
+    vbo: GLuint,
+    ebo: GLuint,
+    cols: usize,
+    rows: usize,
+    cell_width: f32,
+    cell_height: f32,
+    window_width: f32,
+    window_height: f32,
+    cell_size_loc: GLint,
+    screen_size_loc: GLint,
+    texture_loc: GLint,
+    has_texture_loc: GLint,
+    texture_id: GLuint,
+    freetype: Option<Library>,
+    font_cache: HashMap<char, Glyph>,
+}
+
+impl GpuRenderer {
+    pub fn new(
+        cell_width: f32,
+        cell_height: f32,
+        cols: usize,
+        rows: usize,
+        window_width: u32,
+        window_height: u32,
+    ) -> Result<Self> {
+        // Initialize FreeType
+        let freetype_lib = match Library::init() {
+            Ok(lib) => Some(lib),
+            Err(_) => None,
+        };
+
+        unsafe {
+            gl::Enable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+
+            let program = Self::create_shader_program(VERTEX_SHADER, FRAGMENT_SHADER)?;
+
+            let mut vao: GLuint = 0;
+            let mut vbo: GLuint = 0;
+            let mut ebo: GLuint = 0;
+
+            gl::GenVertexArrays(1, &mut vao);
+            gl::GenBuffers(1, &mut vbo);
+            gl::GenBuffers(1, &mut ebo);
+
+            let stride = 8 * std::mem::size_of::<GLfloat>() as GLsizei;
+            let offset = |i: usize| (i * std::mem::size_of::<GLfloat>()) as *const _;
+
+            gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, stride, offset(0));
+            gl::EnableVertexAttribArray(0);
+            gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, stride, offset(2));
+            gl::EnableVertexAttribArray(1);
+            gl::VertexAttribPointer(2, 4, gl::FLOAT, gl::FALSE, stride, offset(4));
+            gl::EnableVertexAttribArray(2);
+
+            gl::BindVertexArray(vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
+
+            let mut tex: GLuint = 0;
+            gl::GenTextures(1, &mut tex);
+            gl::BindTexture(gl::TEXTURE_2D, tex);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+
+            let cell_size_loc =
+                gl::GetUniformLocation(program, b"uCellSize\0".as_ptr() as *const _);
+            let screen_size_loc =
+                gl::GetUniformLocation(program, b"uScreenSize\0".as_ptr() as *const _);
+            let texture_loc = gl::GetUniformLocation(program, b"uTexture\0".as_ptr() as *const _);
+            let has_texture_loc =
+                gl::GetUniformLocation(program, b"uHasTexture\0".as_ptr() as *const _);
+
+            Ok(Self {
+                program,
+                vao,
+                vbo,
+                ebo,
+                cols,
+                rows,
+                cell_width,
+                cell_height,
+                window_width: window_width as f32,
+                window_height: window_height as f32,
+                cell_size_loc,
+                screen_size_loc,
+                texture_loc,
+                has_texture_loc,
+                texture_id: tex,
+                freetype: freetype_lib,
+                font_cache: HashMap::new(),
+            })
+        }
+    }
+}
+
+unsafe fn create_shader(type_: GLenum, source: &str) -> Result<GLuint> {
+    let shader = gl::CreateShader(type_);
+    let c_source = std::ffi::CString::new(source).unwrap();
+    gl::ShaderSource(shader, 1, &c_source.as_ptr(), std::ptr::null());
+    gl::CompileShader(shader);
+
+    let mut status: GLint = 0;
+    gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut status);
+    if status == 0 {
+        let mut len: GLint = 0;
+        gl::GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut len);
+        let mut log = vec![0u8; len as usize];
+        gl::GetShaderInfoLog(
+            shader,
+            len,
+            std::ptr::null_mut(),
+            log.as_mut_ptr() as *mut _;
+        );
+        let msg = String::from_utf8_unchecked(log);
+        anyhow::bail!("Shader compilation failed: {}", msg);
+    }
+
+    Ok(shader)
+}
+
+unsafe fn create_shader_program(vs: &str, fs: &str) -> Result<GLuint> {
+    let vertex_shader = Self::create_shader(gl::VERTEX_SHADER, vs)?;
+    let fragment_shader = Self::create_shader(gl::FRAGMENT_SHADER, fs)?;
+
+    let program = gl::CreateProgram();
+    gl::AttachShader(program, vertex_shader);
+    gl::AttachShader(program, fragment_shader);
+    gl::LinkProgram(program);
+
+    let mut status: GLint = 0;
+    gl::GetProgramiv(program, gl::LINK_STATUS, &mut status);
+    if status == 0 {
+        let mut len: GLint = 0;
+        gl::GetProgramiv(program, gl::INFO_LOG_LENGTH, &mut len);
+        let mut log = vec![0u8; len as usize];
+        gl::GetProgramInfoLog(
+            program,
+            len,
+            std::ptr::null_mut(),
+            log.as_mut_ptr() as *mut _;
+        );
+        let msg = String::from_utf8_unchecked(log);
+        anyhow::bail!("Program linking failed: {}", msg);
+    }
+
+    gl::DeleteShader(vertex_shader);
+    gl::DeleteShader(fragment_shader);
+
+    Ok(program)
+}URE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+
+            let cell_size_loc =
+                gl::GetUniformLocation(program, b"uCellSize\0".as_ptr() as *const _);
+            let screen_size_loc =
+                gl::GetUniformLocation(program, b"uScreenSize\0".as_ptr() as *const _);
+            let texture_loc = gl::GetUniformLocation(program, b"uTexture\0".as_ptr() as *const _);
+            let has_texture_loc =
+                gl::GetUniformLocation(program, b"uHasTexture\0".as_ptr() as *const _);
+
+            Ok(Self {
+                program,
+                vao,
+                vbo,
+                ebo,
+                cols,
+                rows,
+                cell_width,
+                cell_height,
+                window_width: window_width as f32,
+                window_height: window_height as f32,
+                cell_size_loc,
+                screen_size_loc,
+                texture_loc,
+                has_texture_loc,
+                texture_id: tex,
+            })
+        }
+    }
+}
+
+unsafe fn create_shader(type_: GLenum, source: &str) -> Result<GLuint> {
+    let shader = gl::CreateShader(type_);
+    let c_source = std::ffi::CString::new(source).unwrap();
+    gl::ShaderSource(shader, 1, &c_source.as_ptr(), std::ptr::null());
+    gl::CompileShader(shader);
+
+    let mut status: GLint = 0;
+    gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut status);
+    if status == 0 {
+        let mut len: GLint = 0;
+        gl::GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut len);
+        let mut log = vec![0u8; len as usize];
+        gl::GetShaderInfoLog(
+            shader,
+            len,
+            std::ptr::null_mut(),
+            log.as_mut_ptr() as *mut _,
+        );
+        let msg = String::from_utf8_unchecked(log);
+        anyhow::bail!("Shader compilation failed: {}", msg);
+    }
+
+    Ok(shader)
+}
+
+unsafe fn create_shader_program(vs: &str, fs: &str) -> Result<GLuint> {
+    let vertex_shader = Self::create_shader(gl::VERTEX_SHADER, vs)?;
+    let fragment_shader = Self::create_shader(gl::FRAGMENT_SHADER, fs)?;
+
+    let program = gl::CreateProgram();
+    gl::AttachShader(program, vertex_shader);
+    gl::AttachShader(program, fragment_shader);
+    gl::LinkProgram(program);
+
+    let mut status: GLint = 0;
+    gl::GetProgramiv(program, gl::LINK_STATUS, &mut status);
+    if status == 0 {
+        let mut len: GLint = 0;
+        gl::GetProgramiv(program, gl::INFO_LOG_LENGTH, &mut len);
+        let mut log = vec![0u8; len as usize];
+        gl::GetProgramInfoLog(
+            program,
+            len,
+            std::ptr::null_mut(),
+            log.as_mut_ptr() as *mut _,
+        );
+        let msg = String::from_utf8_unchecked(log);
+        anyhow::bail!("Program linking failed: {}", msg);
+    }
+
+    gl::DeleteShader(vertex_shader);
+    gl::DeleteShader(fragment_shader);
+
+    Ok(program)
+}
+"#;
+
+// Fragment shader  
+const FRAGMENT_SHADER: &str = r#"#version 330 core
+in vec2 TexCoord;
+in vec4 VertexColor;
+
+out vec4 FragColor;
+
+uniform sampler2D uTexture;
+uniform bool uHasTexture;
+
+void main() {
+    if (uHasTexture) {
+        float alpha = texture(uTexture, TexCoord).r;
+        FragColor = vec4(VertexColor.rgb, VertexColor.a * alpha);
+    } else {
+        FragColor = VertexColor;
+    }
+}
+"#;
+
+pub struct GpuRenderer {
+    program: GLuint,
+    vao: GLuint,
+    vbo: GLuint,
+    ebo: GLuint,
+    cols: usize,
+    rows: usize,
+    cell_width: f32,
+    cell_height: f32,
+    window_width: f32,
+    window_height: f32,
+    cell_size_loc: GLint,
+    screen_size_loc: GLint,
+    texture_loc: GLint,
+    has_texture_loc: GLint,
+    texture_id: GLuint,
+}
+
+impl GpuRenderer {
+    pub fn new(
+        cell_width: f32,
+        cell_height: f32,
+        cols: usize,
+        rows: usize,
+        window_width: u32,
+        window_height: u32,
+    ) -> Result<Self> {
+        unsafe {
+            gl::Enable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+
+            let program = Self::create_shader_program(VERTEX_SHADER, FRAGMENT_SHADER)?;
+
+            let mut vao: GLuint = 0;
+            let mut vbo: GLuint = 0;
+            let mut ebo: GLuint = 0;
+
+            gl::GenVertexArrays(1, &mut vao);
+            gl::GenBuffers(1, &mut vbo);
+            gl::GenBuffers(1, &mut e0);
+
+            gl::BindVertexArray(vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
+
+            let stride = 8 * std::mem::size_of::<GLfloat>() as GLsizei;
+            let offset = |i: usize| (i * std::mem::size_of::<GLfloat>()) as *const _;
+
+            gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, stride, offset(0));
+            gl::EnableVertexAttribArray(0);
+            gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, stride, offset(2));
+            gl::EnableVertexAttribArray(1);
+            gl::VertexAttribPointer(2, 4, gl::FLOAT, gl::FALSE, stride, offset(4));
+            gl::EnableVertexAttribArray(2);
+
+            gl::BindVertexArray(0);
+
+            let mut tex: GLuint = 0;
+            gl::GenTextures(1, &mut tex);
+            gl::BindTexture(gl::TEXTURE_2D, tex);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+
+            let cell_size_loc =
+                gl::GetUniformLocation(program, b"uCellSize\0".as_ptr() as *const _);
+            let screen_size_loc =
+                gl::GetUniformLocation(program, b"uScreenSize\0".as_ptr() as *const _);
+            let texture_loc = gl::GetUniformLocation(program, b"uTexture\0".as_ptr() as *const _);
+            let has_texture_loc =
+                gl::GetUniformLocation(program, b"uHasTexture\0".as_ptr() as *const _);
+
+            Ok(Self {
+                program,
+                vao,
+                vbo,
+                ebo,
+                cols,
+                rows,
+                cell_width,
+                cell_height,
+                window_width: window_width as f32,
+                window_height: window_height as f32,
+                cell_size_loc,
+                screen_size_loc,
+                texture_loc,
+                has_texture_loc,
+                texture_id: tex,
+            })
+        }
+    }
+}
+
+unsafe fn create_shader(type_: GLenum, source: &str) -> Result<GLuint> {
+    let shader = gl::CreateShader(type_);
+    let c_source = std::ffi::CString::new(source).unwrap();
+    gl::ShaderSource(shader, 1, &c_source.as_ptr(), std::ptr::null());
+    gl::CompileShader(shader);
+
+    let mut status: GLint = 0;
+    gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut status);
+    if status == 0 {
+        let mut len: GLint = 0;
+        gl::GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut len);
+        let mut log = vec![0u8; len as usize];
+        gl::GetShaderInfoLog(
+            shader,
+            len,
+            std::ptr::null_mut(),
+            log.as_mut_ptr() as *mut _,
+        );
+        let msg = String::from_utf8_unchecked(log);
+        anyhow::bail!("Shader compilation failed: {}", msg);
+    }
+
+    Ok(shader)
+}
+
+unsafe fn create_shader_program(vs: &str, fs: &str) -> Result<GLuint> {
+    let vertex_shader = Self::create_shader(gl::VERTEX_SHADER, vs)?;
+    let fragment_shader = Self::create_shader(gl::FRAGMENT_SHADER, fs)?;
+
+    let program = gl::CreateProgram();
+    gl::AttachShader(program, vertex_shader);
+    gl::AttachShader(program, fragment_shader);
+    gl::LinkProgram(program);
+
+    let mut status: GLint = 0;
+    gl::GetProgramiv(program, gl::LINK_STATUS, &mut status);
+    if status == 0 {
+        let mut len: GLint = 0;
+        gl::GetProgramiv(program, gl::INFO_LOG_LENGTH, &mut len);
+        let mut log = vec![0u8; len as usize];
+        gl::GetProgramInfoLog(
+            program,
+            len,
+            std::ptr::null_mut(),
+            log.as_mut_ptr() as *mut _,
+        );
+        let msg = String::from_utf8_unchecked(log);
+        anyhow::bail!("Program linking failed: {}", msg);
+    }
+
+    gl::DeleteShader(vertex_shader);
+    gl::DeleteShader(fragment_shader);
+
+    Ok(program)
+}
+"#;
+
+const FRAGMENT_SHADER: &str = r#"#version 330 core
+in vec2 TexCoord;
+in vec4 VertexColor;
+
+out vec4 FragColor;
+
+uniform sampler2D uTexture;
+uniform bool uHasTexture;
+
+void main() {
+    if (uHasTexture) {
+        float alpha = texture(uTexture, TexCoord).r;
+        FragColor = vec4(VertexColor.rgb, VertexColor.a * alpha);
+    } else {
+        FragColor = VertexColor;
+    }
+}
+"#;
+
+pub struct GpuRenderer {
+    program: GLuint,
+    vao: GLuint,
+    vbo: GLuint,
+    ebo: GLuint,
+    cols: usize,
+    rows: usize,
+    cell_width: f32,
+    cell_height: f32,
+    window_width: f32,
+    window_height: f32,
+    cell_size_loc: GLint,
+    screen_size_loc: GLint,
+    texture_loc: GLint,
+    has_texture_loc: GLint,
+    texture_id: GLuint,
+}
+
+impl GpuRenderer {
+    pub fn new(
+        cell_width: f32,
+        cell_height: f32,
+        cols: usize,
+        rows: usize,
+        window_width: u32,
+        window_height: u32,
+    ) -> Result<Self> {
+        unsafe {
+            gl::Enable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+
+            let program = Self::create_shader_program(VERTEX_SHADER, FRAGMENT_SHADER)?;
+
+            let mut vao: GLuint = 0;
+            let mut vbo: GLuint = 0;
+            let mut ebo: GLuint = 0;
+
+            gl::GenVertexArrays(1, &mut vao);
+            gl::GenBuffers(1, &mut vbo);
+            gl::GenBuffers(1, &mut ebo);
+
+            gl::BindVertexArray(vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
+
+            let stride = 8 * std::mem::size_of::<GLfloat>() as GLsizei;
+            let offset = |i: usize| (i * std::mem::size_of::<GLfloat>()) as *const _;
+
+            gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, stride, offset(0));
+            gl::EnableVertexAttribArray(0);
+            gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, stride, offset(2));
+            gl::EnableVertexAttribArray(1);
+            gl::VertexAttribPointer(2, 4, gl::FLOAT, gl::FALSE, stride, offset(4));
+            gl::EnableVertexAttribArray(2);
+
+            gl::BindVertexArray(0);
+
+            let mut tex: GLuint = 0;
+            gl::GenTextures(1, &mut tex);
+            gl::BindTexture(gl::TEXTURE_2D, tex);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+
+            let cell_size_loc =
+                gl::GetUniformLocation(program, b"uCellSize\0".as_ptr() as *const _);
+            let screen_size_loc =
+                gl::GetUniformLocation(program, b"uScreenSize\0".as_ptr() as *const _);
+            let texture_loc = gl::GetUniformLocation(program, b"uTexture\0".as_ptr() as *const _);
+            let has_texture_loc =
+                gl::GetUniformLocation(program, b"uHasTexture\0".as_ptr() as *const _);
+
+            Ok(Self {
+                program,
+                vao,
+                vbo,
+                ebo,
+                cols,
+                rows,
+                cell_width,
+                cell_height,
+                window_width: window_width as f32,
+                window_height: window_height as f32,
+                cell_size_loc,
+                screen_size_loc,
+                texture_loc,
+                has_texture_loc,
+                texture_id: tex,
+            })
+        }
+    }
+
+    unsafe fn create_shader(type_: GLenum, source: &str) -> Result<GLuint> {
+        let shader = gl::CreateShader(type_);
+        let c_source = std::ffi::CString::new(source).unwrap();
+        gl::ShaderSource(shader, 1, &c_source.as_ptr(), std::ptr::null());
+        gl::CompileShader(shader);
+
+        let mut status: GLint = 0;
+        gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut status);
+    if status == 0 {
+        let mut len: GLint = 0;
+        gl::GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut len);
+        let mut log = vec![0u8; len as usize];
+        gl::GetShaderInfoLog(
+            shader,
+            len,
+            std::ptr::null_mut(),
+            log.as_mut_ptr() as *mut _,
+        );
+        let msg = String::from_utf8_unchecked(log);
+        anyhow::bail!("Shader compilation failed: {}", msg);
+    }
+
+        Ok(shader)
+    }
+
+    unsafe fn create_shader_program(vs: &str, fs: &str) -> Result<GLuint> {
+        let vertex_shader = Self::create_shader(gl::VERTEX_SHADER, vs)?;
+        let fragment_shader = Self::create_shader(gl::FRAGMENT_SHADER, fs)?;
+
+        let program = gl::CreateProgram();
+        gl::AttachShader(program, vertex_shader);
+        gl::AttachShader(program, fragment_shader);
+        gl::LinkProgram(program);
+
+        let mut status: GLint = 0;
+        gl::GetProgramiv(program, gl::LINK_STATUS, &mut status);
+    if status == 0 {
+        let mut len: GLint = 0;
+        gl::GetProgramiv(program, gl::INFO_LOG_LENGTH, &mut len);
+        let mut log = vec![0u8; len as usize];
+        gl::GetProgramInfoLog(
+            program,
+            len,
+            std::ptr::null_mut(),
+            log.as_mut_ptr() as *mut _,
+        );
+        let msg = String::from_utf8_unchecked(log);
+        anyhow::bail!("Program linking failed: {}", msg);
+    }
+
+        gl::DeleteShader(vertex_shader);
+        gl::DeleteShader(fragment_shader);
+
+        Ok(program)
+    }
+
+    pub fn resize(&mut self, cols: usize, rows: usize, window_width: u32, window_height: u32) {
+        self.cols = cols;
+        self.rows = rows;
+        self.window_width = window_width as f32;
+        self.window_height = window_height as f32;
+    }
+
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn mark_dirty(
+        &mut self,
+        _start_row: usize,
+        _start_col: usize,
+        _end_row: usize,
+        _end_col: usize,
+    ) {
+    }
+
+    pub fn render(&mut self, screen: &ScreenBuffer, cursor: &Cursor) {
+        log::trace!("GPU render started");
+        let screen_width = (self.cols as f32) * self.cell_width;
+        let screen_height = (self.rows as f32) * self.cell_height;
+
+        unsafe {
+            gl::Viewport(
+                0,
+                0,
+                self.window_width as GLsizei,
+                self.window_height as GLsizei,
+            );
+            gl::ClearColor(0.05, 0.05, 0.07, 1.0);
+            gl::Clear(gl::COLOR_BUFFER_BIT);
+
+            gl::UseProgram(self.program);
+            gl::Uniform2f(self.cell_size_loc, self.cell_width, self.cell_height);
+            gl::Uniform2f(self.screen_size_loc, screen_width, screen_height);
+            gl::Uniform1i(self.texture_loc, 0);
+            gl::Uniform1i(self.has_texture_loc, 0);
+
+            let mut vertices: Vec<GLfloat> = Vec::new();
+            let mut indices: Vec<GLuint> = Vec::new();
+            let mut idx: GLuint = 0;
+
+            for row in 0..screen.rows().min(self.rows) {
+                for col in 0..screen.cols().min(self.cols) {
+                    if let Some(cell) = screen.cell(row, col) {
+                        let fg = self.attrs_to_color(&cell.attrs, false);
+                        let bg = self.attrs_to_color(&cell.attrs, true);
+
+                        let x = col as f32;
+                        let y = row as f32;
+
+                        let cell_verts = self.make_cell(x, y, bg);
+                        for v in cell_verts {
+                            vertices.extend_from_slice(&v);
+                        }
+                        indices.extend_from_slice(&[idx, idx + 1, idx + 2, idx, idx + 2, idx + 3]);
+                        idx += 4;
+
+                        if cell.c != ' ' {
+                            let text_verts = self.make_cell_text(x, y, fg);
+                            for v in text_verts {
+                                vertices.extend_from_slice(&v);
+                            }
+                            indices.extend_from_slice(&[
+                                idx,
+                                idx + 1,
+                                idx + 2,
+                                idx,
+                                idx + 2,
+                                idx + 3,
+                            ]);
+                            idx += 4;
+                        }
+                    }
+                }
+            }
+
+            if cursor.visible() {
+                let x = cursor.col() as f32;
+                let y = cursor.row() as f32;
+                let cursor_color = [1.0, 1.0, 1.0, 1.0];
+                let cursor_verts = self.make_cell(x, y, cursor_color);
+                for v in cursor_verts {
+                    vertices.extend_from_slice(&v);
+                }
+                indices.extend_from_slice(&[idx, idx + 1, idx + 2, idx, idx + 2, idx + 3]);
+            }
+
+            gl::BindVertexArray(self.vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
+            gl::BufferData(
+                gl::ARRAY_BUFFER,
+                (vertices.len() * std::mem::size_of::<GLfloat>()) as GLsizeiptr,
+                vertices.as_ptr() as *const _,
+                gl::DYNAMIC_DRAW,
+            );
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
+            gl::BufferData(
+                gl::ELEMENT_ARRAY_BUFFER,
+                (indices.len() * std::mem::size_of::<GLuint>()) as GLsizeiptr,
+                indices.as_ptr() as *const _,
+                gl::DYNAMIC_DRAW,
+            );
+            gl::DrawElements(
+                gl::TRIANGLES,
+                indices.len() as i32,
+                gl::UNSIGNED_INT,
+                std::ptr::null(),
+            );
+            gl::BindVertexArray(0);
+        }
+    }
+
+    fn make_cell(&self, x: f32, y: f32, color: [f32; 4]) -> Vec<[f32; 8]> {
+        let w = self.cell_width;
+        let h = self.cell_height;
+        vec![
+            [x, y, 0.0, 0.0, color[0], color[1], color[2], color[3]],
+            [x + w, y, 1.0, 0.0, color[0], color[1], color[2], color[3]],
+            [
+                x + w,
+                y + h,
+                1.0,
+                1.0,
+                color[0],
+                color[1],
+                color[2],
+                color[3],
+            ],
+            [x, y + h, 0.0, 1.0, color[0], color[1], color[2], color[3]],
+        ]
+    }
+
+    fn make_cell_text(&self, x: f32, y: f32, color: [f32; 4]) -> Vec<[f32; 8]> {
+        let w = self.cell_width;
+        let h = self.cell_height;
+        let padding = 2.0;
+        vec![
+            [
+                x + padding,
+                y + padding,
+                0.0,
+                0.0,
+                color[0],
+                color[1],
+                color[2],
+                color[3],
+            ],
+            [
+                x + w - padding,
+                y + padding,
+                1.0,
+                0.0,
+                color[0],
+                color[1],
+                color[2],
+                color[3],
+            ],
+            [
+                x + w - padding,
+                y + h - padding,
+                1.0,
+                1.0,
+                color[0],
+                color[1],
+                color[2],
+                color[3],
+            ],
+            [
+                x + padding,
+                y + h - padding,
+                0.0,
+                1.0,
+                color[0],
+                color[1],
+                color[2],
+                color[3],
+            ],
+        ]
+    }
+
+    fn attrs_to_color(&self, attrs: &CellAttributes, is_bg: bool) -> [f32; 4] {
+        if is_bg {
+            if let Some(rgb) = attrs.bg_rgb {
+                return [
+                    rgb[0] as f32 / 255.0,
+                    rgb[1] as f32 / 255.0,
+                    rgb[2] as f32 / 255.0,
+                    1.0,
+                ];
+            }
+            if let Some(idx) = attrs.bg_color {
+                return Self::ansi_color(idx);
+            }
+            return [0.0, 0.0, 0.0, 1.0];
+        } else {
+            if let Some(rgb) = attrs.fg_rgb {
+                return [
+                    rgb[0] as f32 / 255.0,
+                    rgb[1] as f32 / 255.0,
+                    rgb[2] as f32 / 255.0,
+                    1.0,
+                ];
+            }
+            if let Some(idx) = attrs.fg_color {
+                return Self::ansi_color(idx);
+            }
+            return [1.0, 1.0, 1.0, 1.0];
+        }
+    }
+
+    fn ansi_color(index: u8) -> [f32; 4] {
+        let colors: [[u8; 3]; 16] = [
+            [0, 0, 0],
+            [205, 0, 0],
+            [0, 205, 0],
+            [205, 205, 0],
+            [0, 0, 238],
+            [205, 0, 205],
+            [0, 205, 205],
+            [229, 229, 229],
+            [127, 127, 127],
+            [255, 0, 0],
+            [0, 255, 0],
+            [255, 255, 0],
+            [0, 0, 255],
+            [255, 0, 255],
+            [0, 255, 255],
+            [255, 255, 255],
+        ];
+        let c = colors[(index as usize) % 16];
+        [
+            c[0] as f32 / 255.0,
+            c[1] as f32 / 255.0,
+            c[2] as f32 / 255.0,
+            1.0,
+        ]
+    }
+
+    pub fn swap_buffers(&self) {}
+}
+
+impl Drop for GpuRenderer {
+    fn drop(&mut self) {
+        unsafe {
+            gl::DeleteProgram(self.program);
+            gl::DeleteBuffers(1, &self.vbo);
+            gl::DeleteBuffers(1, &self.ebo);
+            gl::DeleteVertexArrays(1, &self.vao);
+            gl::DeleteTextures(1, &self.texture_id);
+        }
+    }
+}

@@ -1,0 +1,457 @@
+#![allow(unused)]
+
+use std::error::Error;
+use std::ffi::CString;
+use std::num::NonZeroU32;
+
+use glutin::config::{Api, Config, ConfigTemplateBuilder, GetGlConfig};
+use glutin::context::{
+    ContextApi, ContextAttributesBuilder, NotCurrentContext, PossiblyCurrentContext, Version,
+};
+use glutin::display::GetGlDisplay;
+use glutin::prelude::*;
+use glutin::surface::{Surface, SwapInterval, WindowSurface};
+use glutin_winit::{DisplayBuilder, GlWindow};
+use raw_window_handle::HasWindowHandle;
+use termina::config::Config as AppConfig;
+use termina::ui::Application;
+use termina::window::input::InputHandler;
+use winit::application::ApplicationHandler;
+use winit::dpi::LogicalSize;
+use winit::event::{ElementState, KeyEvent as WinitKeyEvent, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::window::{Window, WindowAttributes, WindowId};
+
+struct App {
+    config: AppConfig,
+    template: ConfigTemplateBuilder,
+    display_builder: DisplayBuilder,
+    input_handler: InputHandler,
+    app: Option<Application>,
+    gl_context: Option<PossiblyCurrentContext>,
+    state: Option<AppState>,
+    frame_count: u64,
+    start: std::time::Instant,
+    exit_state: Result<(), Box<dyn Error>>,
+}
+
+struct AppState {
+    gl_surface: Surface<WindowSurface>,
+    window: Window,
+}
+
+impl App {
+    fn new(config: AppConfig) -> Self {
+        let template = ConfigTemplateBuilder::new().with_alpha_size(8);
+        let display_builder =
+            DisplayBuilder::new().with_window_attributes(Some(window_attributes()));
+
+        Self {
+            config: config.clone(),
+            template,
+            display_builder,
+            input_handler: InputHandler::new(),
+            app: None,
+            gl_context: None,
+            state: None,
+            frame_count: 0,
+            start: std::time::Instant::now(),
+            exit_state: Ok(()),
+        }
+    }
+}
+
+fn window_attributes() -> WindowAttributes {
+    Window::default_attributes()
+        .with_title("Termina")
+        .with_inner_size(LogicalSize::new(800, 600))
+}
+
+fn gl_config_picker(configs: Box<dyn Iterator<Item = Config> + '_>) -> Config {
+    configs
+        .reduce(|accum, config| {
+            let transparency_check = config.supports_transparency().unwrap_or(false)
+                & !accum.supports_transparency().unwrap_or(false);
+
+            if transparency_check || config.num_samples() > accum.num_samples() {
+                config
+            } else {
+                accum
+            }
+        })
+        .unwrap()
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        log::info!("RESUMED called - creating window");
+
+        let (mut window, gl_config) = match self.display_builder.clone().build(
+            event_loop,
+            self.template.clone(),
+            gl_config_picker,
+        ) {
+            Ok((window, gl_config)) => {
+                let win = window.unwrap();
+                // Solicitar foco explícito para Wayland
+                win.request_redraw();
+                (win, gl_config)
+            }
+            Err(err) => {
+                self.exit_state = Err(err);
+                event_loop.exit();
+                return;
+            }
+        };
+
+        log::info!("Picked a config with {} samples", gl_config.num_samples());
+
+        let raw_window_handle = window.window_handle().ok().map(|wh| wh.as_raw());
+
+        let context_attributes = ContextAttributesBuilder::new().build(raw_window_handle);
+        let fallback_context_attributes = ContextAttributesBuilder::new()
+            .with_context_api(ContextApi::Gles(None))
+            .build(raw_window_handle);
+        let legacy_context_attributes = ContextAttributesBuilder::new()
+            .with_context_api(ContextApi::OpenGl(Some(Version::new(2, 1))))
+            .build(raw_window_handle);
+
+        let gl_display = gl_config.display();
+
+        let gl_context = unsafe {
+            gl_display
+                .create_context(&gl_config, &context_attributes)
+                .unwrap_or_else(|_| {
+                    gl_display
+                        .create_context(&gl_config, &fallback_context_attributes)
+                        .unwrap_or_else(|_| {
+                            gl_display
+                                .create_context(&gl_config, &legacy_context_attributes)
+                                .expect("Failed to create GL context")
+                        })
+                })
+        };
+
+        self.gl_context = Some(gl_context.treat_as_possibly_current());
+
+        let attrs = window
+            .build_surface_attributes(Default::default())
+            .expect("Failed to build surface attributes");
+        let gl_surface = unsafe {
+            gl_config
+                .display()
+                .create_window_surface(&gl_config, &attrs)
+                .unwrap()
+        };
+
+        let gl_context = self.gl_context.as_ref().unwrap();
+        gl_context.make_current(&gl_surface).unwrap();
+        log::info!("OpenGL context made current");
+
+        unsafe {
+            let cstr = CString::new("".as_bytes()).unwrap();
+            gl::load_with(|symbol| {
+                let symbol_cstr = CString::new(symbol).unwrap();
+                gl_config.display().get_proc_address(symbol_cstr.as_c_str()) as *const _
+            });
+
+            let version = gl::GetString(gl::VERSION);
+            if !version.is_null() {
+                let version_str = std::ffi::CStr::from_ptr(version as *const _)
+                    .to_string_lossy()
+                    .into_owned();
+                log::info!("OpenGL version: {}", version_str);
+            }
+        }
+
+        if let Err(res) = gl_surface
+            .set_swap_interval(gl_context, SwapInterval::Wait(NonZeroU32::new(1).unwrap()))
+        {
+            log::warn!("Error setting vsync: {:?}", res);
+        }
+
+        let size = window.inner_size();
+        let mut application = Application::new(self.config.clone()).ok();
+        if let Some(ref mut app) = application {
+            app.init(size.width, size.height).ok();
+        }
+        self.app = application;
+
+        log::info!("Application initialized");
+
+        log::info!("Setting state and exiting resumed");
+        self.state = Some(AppState { gl_surface, window });
+        log::info!("resumed complete, doing initial render");
+
+        // Initial render
+        if let (Some(ref mut app), Some(ref gl_context), Some(ref state)) =
+            (&mut self.app, &mut self.gl_context, &self.state)
+        {
+            log::info!("Calling app.update()");
+            app.update();
+            log::info!("app.update() done, calling app.render()");
+            app.render();
+            log::info!("Render done, trying swap...");
+            if let Err(e) = state.gl_surface.swap_buffers(gl_context) {
+                log::error!("Initial swap error: {:?}", e);
+            }
+            log::info!("Initial swap done");
+        }
+
+        // Request subsequent redraws
+        if let Some(ref state) = self.state {
+            state.window.request_redraw();
+        }
+    }
+
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        log::info!("Suspended");
+        if let Some(state) = self.state.take() {
+            drop(state);
+        }
+        self.gl_context = Some(
+            self.gl_context
+                .take()
+                .unwrap()
+                .make_not_current()
+                .unwrap()
+                .treat_as_possibly_current(),
+        );
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        match event {
+            WindowEvent::CloseRequested => {
+                log::info!("Close requested");
+                event_loop.exit();
+            }
+            WindowEvent::Resized(size) if size.width != 0 && size.height != 0 => {
+                log::info!("Window resized: {:?}", size);
+                if let Some(AppState { gl_surface, window }) = self.state.as_ref() {
+                    let gl_context = self.gl_context.as_ref().unwrap();
+                    gl_surface.resize(
+                        gl_context,
+                        NonZeroU32::new(size.width).unwrap(),
+                        NonZeroU32::new(size.height).unwrap(),
+                    );
+                    if let Some(ref mut app) = self.app {
+                        app.resize(size.width, size.height);
+                    }
+                    window.request_redraw();
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                // Rendering now happens in about_to_wait
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                // Actualizar estado de modifiers (SUPER, CTRL, ALT, etc.)
+                let mod_state = modifiers.state();
+                let mut mod_bits: u32 = 0;
+                if mod_state.super_key() {
+                    mod_bits |= 0x08; // SUPER
+                }
+                if mod_state.control_key() {
+                    mod_bits |= 0x01; // CTRL
+                }
+                if mod_state.alt_key() {
+                    mod_bits |= 0x02; // ALT
+                }
+                if mod_state.shift_key() {
+                    mod_bits |= 0x04; // SHIFT
+                }
+                self.input_handler.set_modifiers(mod_bits);
+                log::debug!("Modifiers changed: {:08b}", mod_bits);
+            }
+            WindowEvent::Focused(focused) => {
+                log::info!("Window focus: {}", focused);
+                self.input_handler.set_focus(focused);
+            }
+            WindowEvent::KeyboardInput {
+                event:
+                    WinitKeyEvent {
+                        state,
+                        logical_key,
+                        text,
+                        physical_key,
+                        ..
+                    },
+                ..
+} => {
+                event_loop.exit();
+                return Ok(());
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                for ch in "\x1b[C".chars() {
+                    let ke = self.input_handler.handle_char(ch);
+                    if let Some(ref mut app) = self.app {
+                        app.handle_input(ke);
+                    }
+                }
+            }
+                        // Alternative: Ctrl+Shift+Q o Super+Q para cerrar
+                        Key::Character(ref c)
+                            if (is_ctrl && is_shift && c.eq_ignore_ascii_case("q"))
+                                || (is_super && c.eq_ignore_ascii_case("q")) =>
+                        {
+                            log::info!(
+                                "Close shortcut pressed (Super+Q o Ctrl+Shift+Q), closing window"
+                            );
+                            event_loop.exit();
+                            return;
+                        }
+                        Key::Character(c) => {
+                            // Procesar caracter normal
+                            for ch in c.chars() {
+                                let ke = self.input_handler.handle_char(ch);
+                                if let Some(ref mut app) = self.app {
+                                    app.handle_input(ke);
+                                }
+                            }
+                        }
+                        // Alternative: Ctrl+Shift+Q to close
+                        Key::Character(c)
+                            if (mod_state & 0x09) != 0 && c.eq_ignore_ascii_case("q") =>
+                        {
+                            log::info!("Ctrl+Shift+Q or Super+Q pressed, closing window");
+                            event_loop.exit();
+                            return;
+                        }
+                        Key::Character(c) => {
+                            // Verificar Super+Q (bit 3 = SUPER, bit 0 = CTRL)
+                            if is_super && c.eq_ignore_ascii_case("q") {
+                                log::info!("Super+Q pressed, closing window");
+                                event_loop.exit();
+                                return;
+                            }
+                            // Procesar caracter normal
+                            for ch in c.chars() {
+                                let ke = self.input_handler.handle_char(ch);
+                                if let Some(ref mut app) = self.app {
+                                    app.handle_input(ke);
+                                }
+                            }
+                        }
+                        Key::Named(NamedKey::Enter) => {
+                            let ke = self.input_handler.handle_char('\n');
+                            if let Some(ref mut app) = self.app {
+                                app.handle_input(ke);
+                            }
+                        }
+                        Key::Named(NamedKey::Tab) => {
+                            let ke = self.input_handler.handle_char('\t');
+                            if let Some(ref mut app) = self.app {
+                                app.handle_input(ke);
+                            }
+                        }
+                        Key::Named(NamedKey::Backspace) => {
+                            let ke = self.input_handler.handle_char('\x7f');
+                            if let Some(ref mut app) = self.app {
+                                app.handle_input(ke);
+                            }
+                        }
+                        Key::Named(NamedKey::ArrowUp) => {
+                            for ch in "\x1b[A".chars() {
+                                let ke = self.input_handler.handle_char(ch);
+                                if let Some(ref mut app) = self.app {
+                                    app.handle_input(ke);
+                                }
+                            }
+                        }
+                        Key::Named(NamedKey::ArrowDown) => {
+                            for ch in "\x1b[B".chars() {
+                                let ke = self.input_handler.handle_char(ch);
+                                if let Some(ref mut app) = self.app {
+                                    app.handle_input(ke);
+                                }
+                            }
+                        }
+                        Key::Named(NamedKey::ArrowRight) => {
+                            for ch in "\x1b[C".chars() {
+                                let ke = self.input_handler.handle_char(ch);
+                                if let Some(ref mut app) = self.app {
+                                    app.handle_input(ke);
+                                }
+                            }
+                        }
+                        Key::Named(NamedKey::ArrowLeft) => {
+                            for ch in "\x1b[D".chars() {
+                                let ke = self.input_handler.handle_char(ch);
+                                if let Some(ref mut app) = self.app {
+                                    app.handle_input(ke);
+                                }
+                            }
+                        }
+                        _ => {
+                            // Intentar capturar caracteres adicionales del texto
+                            if let Some(txt) = text {
+                                for ch in txt.chars() {
+                                    let ke = self.input_handler.handle_char(ch);
+                                    if let Some(ref mut app) = self.app {
+                                        app.handle_input(ke);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        self.frame_count += 1;
+        if self.frame_count % 10 == 0 {
+            log::info!("about_to_wait called, frame {}", self.frame_count);
+        }
+
+        if let (Some(ref mut app), Some(ref gl_context), Some(ref state)) =
+            (&mut self.app, &mut self.gl_context, &self.state)
+        {
+            app.update();
+            app.render();
+
+            if let Err(e) = state.gl_surface.swap_buffers(gl_context) {
+                log::error!("Swap buffers error: {:?}", e);
+            }
+            state.window.request_redraw();
+        } else {
+            log::debug!(
+                "State not ready: app={:?}, ctx={:?}, state={:?}",
+                self.app.is_some(),
+                self.gl_context.is_some(),
+                self.state.is_some()
+            );
+        }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        log::info!("Exiting");
+        self.state = None;
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    log::info!("Starting Termina...");
+
+    let app_config = AppConfig::load()?;
+    let mut app = App::new(app_config);
+
+    let event_loop: EventLoop<()> = EventLoop::new()?;
+
+    log::info!("Event loop created");
+
+    event_loop.set_control_flow(ControlFlow::Poll);
+
+    event_loop.run_app(&mut app)?;
+
+    Ok(())
+}
