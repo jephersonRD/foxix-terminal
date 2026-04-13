@@ -83,29 +83,20 @@ Foxix está diseñado para ser el terminal más eficiente disponible en Linux. B
 
 ## 📦 Instalación de Foxix
 
-### 🚀 Instalación rápida (binario pre-compilado)
+### 🚀 Instalador automático
 
 ```bash
-curl -sL https://github.com/jephersonRD/foxix/releases/latest/download/foxix-install.sh | bash
+curl -sSL https://raw.githubusercontent.com/jephersonRD/foxix-terminal/main/foxix-install.sh | bash
 ```
 
-O manualmente:
-```bash
-# Descargar el tarball
-wget https://github.com/tu-usuario/foxix/releases/latest/download/foxix-0.1.0-linux-x86_64.tar.gz
-
-# Extraer e instalar
-tar -xf foxix-0.1.0-linux-x86_64.tar.gz
-cd foxix-0.1.0
-sudo ./install.sh
-```
+Esto detectará tu distribución, instalará las dependencias necesarias, compilará Foxix y lo configurará.
 
 ### 🛠️ Desde código fuente
 
 ```bash
 # Clonar el repositorio de Foxix
-git clone https://github.com/jephersonRD/foxix.git
-cd foxix
+git clone https://github.com/jephersonRD/foxix-terminal.git
+cd foxix-terminal
 
 # Compilar con Rust (release)
 cargo build --release
@@ -230,6 +221,6 @@ Rust garantiza memoria segura sin garbage collector, lo que se traduce en bajo u
 
 🦊 **Foxix** — The fast Rust terminal emulator for Linux
 
-[⭐ Star Foxix en GitHub](https://github.com/jephersonRD/foxix) · [🐛 Reportar bug](https://github.com/jephersonRD/foxix/issues) · [💬 Discusiones](https://github.com/jephersonRD/foxix/discussions)
+[⭐ Star Foxix en GitHub](https://github.com/jephersonRD/foxix-terminal) · [🐛 Reportar bug](https://github.com/jephersonRD/foxix-terminal/issues) · [💬 Discusiones](https://github.com/jephersonRD/foxix-terminal/discussions)
 
 </div>
