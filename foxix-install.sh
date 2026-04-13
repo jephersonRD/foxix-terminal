@@ -34,7 +34,8 @@ INSTALL_DIR="$HOME/.local/foxix"
 REPO_OWNER="jephersonRD"
 REPO_NAME="foxix-terminal"
 REPO_URL="https://github.com/$REPO_OWNER/$REPO_NAME"
-BIN_LINK="/usr/local/bin/foxix"
+BIN_DIR="$HOME/.local/bin"
+BIN_LINK="$BIN_DIR/foxix"
 CONFIG_DIR="$HOME/.config/foxix"
 
 LANG_CHOICE="es"
@@ -446,18 +447,35 @@ EOF
 make_link() {
   echo -e "${CYAN}$(t "make_link")${NC}"
 
-  if [ -f "$BIN_LINK" ]; then
-    sudo rm "$BIN_LINK"
+  mkdir -p "$BIN_DIR"
+  
+  if [ -L "$BIN_LINK" ]; then
+    rm "$BIN_LINK"
+  elif [ -f "$BIN_LINK" ]; then
+    rm "$BIN_LINK"
   fi
 
-  local foxix_bin="$INSTALL_DIR/foxix/foxix"
-  if [ -f "$foxix_bin" ]; then
-    sudo ln -s "$foxix_bin" "$BIN_LINK"
-  elif [ -f "$INSTALL_DIR/foxix/target/release/foxix" ]; then
-    sudo ln -s "$INSTALL_DIR/foxix/target/release/foxix" "$BIN_LINK"
-  fi
+  local foxix_bins=(
+    "$INSTALL_DIR/foxix/foxix/foxix"
+    "$INSTALL_DIR/foxix/foxix"
+    "$INSTALL_DIR/foxix"
+    "$HOME/.local/foxix/foxix/foxix"
+  )
 
-  echo -e "${GREEN}$(t "link_ok")${NC}"
+  local linked=false
+  for bin in "${foxix_bins[@]}"; do
+    if [ -f "$bin" ]; then
+      ln -s "$bin" "$BIN_LINK"
+      linked=true
+      break
+    fi
+  done
+
+  if [ "$linked" = true ]; then
+    echo -e "${GREEN}$(t "link_ok")${NC}"
+  else
+    echo -e "${RED}No se pudo crear el enlace${NC}"
+  fi
 }
 
 install_desktop_entry() {
@@ -471,12 +489,23 @@ install_desktop_entry() {
   mkdir -p "$icon_dir"
   mkdir -p "$desktop_dir"
   
-  if [ -f "$INSTALL_DIR/foxix/assets/logo/logo.png" ]; then
-    cp "$INSTALL_DIR/foxix/assets/logo/logo.png" "$icon_path"
-  elif [ -f "$INSTALL_DIR/foxix/logo.png" ]; then
-    cp "$INSTALL_DIR/foxix/logo.png" "$icon_path"
-  elif [ -f "$HOME/.local/foxix/foxix/assets/logo/logo.png" ]; then
-    cp "$HOME/.local/foxix/foxix/assets/logo/logo.png" "$icon_path"
+  local icon_sources=(
+    "$INSTALL_DIR/foxix/foxix/assets/logo/logo.png"
+    "$INSTALL_DIR/foxix/assets/logo/logo.png"
+    "$HOME/.local/foxix/foxix/foxix/assets/logo/logo.png"
+    "$HOME/.local/foxix/foxix/assets/logo/logo.png"
+  )
+  
+  for src in "${icon_sources[@]}"; do
+    if [ -f "$src" ]; then
+      cp "$src" "$icon_path"
+      echo -e "${GREEN}  ✓ Icono copiado${NC}"
+      break
+    fi
+  done
+  
+  if [ ! -f "$icon_path" ]; then
+    echo -e "${YELLOW}  Icono no encontrado${NC}"
   fi
   
   rm -f "$desktop_file"
@@ -486,7 +515,7 @@ install_desktop_entry() {
 Name=Foxix
 GenericName=Terminal
 Comment=Foxix Terminal - Emulador de terminal ultra-rápido escrito en Rust
-Exec=/usr/local/bin/foxix
+Exec=$BIN_LINK
 Icon=$icon_path
 Terminal=false
 Type=Application
