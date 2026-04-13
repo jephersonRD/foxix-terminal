@@ -1,7 +1,7 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Foxix Terminal - Instalador
-#  https://github.com/jephersonRD/foxix
+#  https://github.com/jephersonRD/foxix-terminal
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if [ ! -t 0 ]; then
@@ -31,7 +31,9 @@ DIM='\033[2m'
 NC='\033[0m'
 
 INSTALL_DIR="$HOME/.local/foxix"
-REPO_URL="https://github.com/jephersonRD/foxix-terminal"
+REPO_OWNER="jephersonRD"
+REPO_NAME="foxix-terminal"
+REPO_URL="https://github.com/$REPO_OWNER/$REPO_NAME"
 BIN_LINK="/usr/local/bin/foxix"
 CONFIG_DIR="$HOME/.config/foxix"
 
@@ -46,6 +48,7 @@ t() {
         "spanish") echo "Español" ;;
         "english") echo "Inglés" ;;
         "opt_install") echo "Instalar" ;;
+        "opt_update") echo "Actualizar sistema" ;;
         "opt_repair") echo "Reparar" ;;
         "opt_remove") echo "Desinstalar" ;;
         "opt_exit") echo "Salir" ;;
@@ -59,8 +62,6 @@ t() {
         "installing_deps") echo "Instalando dependencias..." ;;
         "downloading") echo "Descargando Foxix..." ;;
         "download_ok") echo "Descarga completada" ;;
-        "compiling") echo "Compilando Foxix (esto puede tomar unos minutos)..." ;;
-        "compile_ok") echo "Compilación completada" ;;
         "install_complete") echo "¡Instalación completada!" ;;
         "launching") echo "Para ejecutar Foxix, usa: foxix" ;;
         "repairing") echo "Reparando instalación..." ;;
@@ -76,10 +77,15 @@ t() {
         "config_ok") echo "Configuración creada" ;;
         "make_link") echo "Creando enlace simbólico..." ;;
         "link_ok") echo "Enlace creado" ;;
-        "missing_rust") echo "Rust no está instalado. Instálalo primero." ;;
         "uninstall_failed") echo "No se pudo eliminar (requiere permisos sudo)." ;;
         "check_deps") echo "Verificando..." ;;
         "install_deps_question") echo "¿Deseas instalar las dependencias faltantes? (s/n)" ;;
+        "updating_system") echo "Actualizando sistema..." ;;
+        "system_updated") echo "Sistema actualizado" ;;
+        "latest_version") echo "Última versión:" ;;
+        "downloading_latest") echo "Descargando última versión..." ;;
+        "release_not_found") echo "No se encontró el Release. Sube el binario a GitHub." ;;
+        "extract_ok") echo "Binario extraído correctamente" ;;
         *) echo "$key" ;;
       esac
       ;;
@@ -89,6 +95,7 @@ t() {
         "spanish") echo "Spanish" ;;
         "english") echo "English" ;;
         "opt_install") echo "Install" ;;
+        "opt_update") echo "Update system" ;;
         "opt_repair") echo "Repair" ;;
         "opt_remove") echo "Uninstall" ;;
         "opt_exit") echo "Exit" ;;
@@ -102,8 +109,6 @@ t() {
         "installing_deps") echo "Installing dependencies..." ;;
         "downloading") echo "Downloading Foxix..." ;;
         "download_ok") echo "Download completed" ;;
-        "compiling") echo "Compiling Foxix (this may take a few minutes)..." ;;
-        "compile_ok") echo "Compilation completed" ;;
         "install_complete") echo "Installation completed!" ;;
         "launching") echo "To run Foxix, use: foxix" ;;
         "repairing") echo "Repairing installation..." ;;
@@ -119,10 +124,15 @@ t() {
         "config_ok") echo "Configuration created" ;;
         "make_link") echo "Creating symbolic link..." ;;
         "link_ok") echo "Link created" ;;
-        "missing_rust") echo "Rust is not installed. Install it first." ;;
         "uninstall_failed") echo "Could not remove (requires sudo permissions)." ;;
         "check_deps") echo "Checking..." ;;
         "install_deps_question") echo "Do you want to install missing dependencies? (y/n)" ;;
+        "updating_system") echo "Updating system..." ;;
+        "system_updated") echo "System updated" ;;
+        "latest_version") echo "Latest version:" ;;
+        "downloading_latest") echo "Downloading latest version..." ;;
+        "release_not_found") echo "Release not found. Upload the binary to GitHub." ;;
+        "extract_ok") echo "Binary extracted successfully" ;;
         *) echo "$key" ;;
       esac
       ;;
@@ -141,28 +151,90 @@ show_banner() {
   echo "  ╚═╝      ╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝"
   echo ""
   echo -e "${NC}"
-  echo -e "    ${DIM}https://github.com/jephersonRD/foxix-terminal${NC}"
+  echo -e "    ${DIM}$REPO_URL${NC}"
   echo ""
+}
+
+get_latest_version() {
+  local version=$(curl -sL "$REPO_URL/releases/latest 2>/dev/null" | grep -oP 'tag/[^" ]+' | head -1 | sed 's|tag/||')
+  echo "$version"
+}
+
+download_latest() {
+  mkdir -p "$INSTALL_DIR"
+
+  if [ -d "$INSTALL_DIR/foxix" ]; then
+    rm -rf "$INSTALL_DIR/foxix"
+  fi
+
+  start_spinner "$(t "downloading_latest")"
+  
+  local version=$(get_latest_version)
+  if [ -z "$version" ]; then
+    version="0.1.0"
+  fi
+  
+  echo -e "${DIM}Version: $version${NC}"
+  
+  local release_url="$REPO_URL/releases/download/$version"
+  local tried_files=()
+  local downloaded=false
+  
+  for filename in "foxix-linux-x86_64.tar.gz" "foxix-$version-linux-x86_64.tar.gz" "foxix-0.1.0-linux-x86_64.tar.gz" "foxix.tar.gz"; do
+    tried_files+=("$filename")
+    if curl -sfL "$release_url/$filename" -o "$INSTALL_DIR/foxix.tar.gz" 2>/dev/null; then
+      downloaded=true
+      break
+    fi
+  done
+  
+  if [ "$downloaded" = false ]; then
+    for filename in "${tried_files[@]}"; do
+      if curl -sfL "$REPO_URL/releases/latest/download/$filename" -o "$INSTALL_DIR/foxix.tar.gz" 2>/dev/null; then
+        downloaded=true
+        break
+      fi
+    done
+  fi
+  
+  if [ "$downloaded" = false ]; then
+    stop_spinner
+    echo -e "${RED}$(t "release_not_found")${NC}"
+    echo -e "${YELLOW}Archivos probados: ${tried_files[*]}${NC}"
+    exit 1
+  fi
+  
+  tar -xzf "$INSTALL_DIR/foxix.tar.gz" -C "$INSTALL_DIR"
+  rm -f "$INSTALL_DIR/foxix.tar.gz"
+  
+  local extracted_dir=$(ls -d "$INSTALL_DIR"/foxix-* 2>/dev/null || ls -d "$INSTALL_DIR"/foxix 2>/dev/null || true)
+  if [ -n "$extracted_dir" ] && [ "$extracted_dir" != "$INSTALL_DIR/foxix" ]; then
+    mv "$extracted_dir" "$INSTALL_DIR/foxix" 2>/dev/null || true
+  fi
+  
+  sleep 0.3
+  stop_spinner
+  echo -e "${GREEN}✓ $(t "extract_ok")${NC}"
 }
 
 detect_distro() {
   echo -e "\n${CYAN}$(t "detecting")${NC}"
-  sleep 0.5
+  sleep 0.3
 
   if [ -f /etc/os-release ]; then
     . /etc/os-release
     DISTRO_NAME="$NAME"
     DISTRO_ID="$ID"
-    DISTRO_LIKE="$ID_LIKE"
+    DISTRO_ID_LIKE="$ID_LIKE"
   elif [ -f /etc/lsb-release ]; then
     . /etc/lsb-release
     DISTRO_NAME="$DISTRIB_DESCRIPTION"
     DISTRO_ID="$DISTRIB_ID"
-    DISTRO_LIKE=""
+    DISTRO_ID_LIKE=""
   else
     DISTRO_NAME="Unknown"
     DISTRO_ID="unknown"
-    DISTRO_LIKE=""
+    DISTRO_ID_LIKE=""
   fi
 
   echo -e "${GREEN}$(t "detected") ${WHITE}${DISTRO_NAME}${NC}"
@@ -195,15 +267,15 @@ detect_distro() {
       PKG_UPDATE="sudo xbps-install -Syu"
       ;;
     *)
-      if echo "$DISTRO_LIKE" | grep -qi "arch"; then
+      if echo "$DISTRO_ID_LIKE" | grep -qi "arch"; then
         PKG_MANAGER="pacman"
         PKG_INSTALL="sudo pacman -S --noconfirm"
         PKG_UPDATE="sudo pacman -Syu --noconfirm"
-      elif echo "$DISTRO_LIKE" | grep -qi "debian\|ubuntu"; then
+      elif echo "$DISTRO_ID_LIKE" | grep -qi "debian\|ubuntu"; then
         PKG_MANAGER="apt"
         PKG_INSTALL="sudo apt install -y"
         PKG_UPDATE="sudo apt update"
-      elif echo "$DISTRO_LIKE" | grep -qi "fedora\|rhel"; then
+      elif echo "$DISTRO_ID_LIKE" | grep -qi "fedora\|rhel"; then
         PKG_MANAGER="dnf"
         PKG_INSTALL="sudo dnf install -y"
         PKG_UPDATE="sudo dnf check-update"
@@ -224,22 +296,22 @@ check_deps() {
 
   case "$PKG_MANAGER" in
     pacman)
-      deps=("rust" "freetype2" "wayland")
+      deps=("freetype2" "wayland")
       ;;
     apt)
-      deps=("rustc" "libfreetype-dev" "libwayland-dev")
+      deps=("libfreetype-dev" "libwayland-dev")
       ;;
     dnf)
-      deps=("rust" "freetype-devel" "wayland-devel")
+      deps=("freetype-devel" "wayland-devel")
       ;;
     zypper)
-      deps=("rust" "freetype2-devel" "wayland-devel")
+      deps=("freetype2-devel" "wayland-devel")
       ;;
     xbps)
-      deps=("rust" "freetype" "wayland")
+      deps=("freetype" "wayland")
       ;;
     *)
-      deps=("rust" "freetype" "wayland")
+      deps=("freetype" "wayland")
       ;;
   esac
 
@@ -247,8 +319,18 @@ check_deps() {
     if command -v "$dep" &> /dev/null || [ -f "/usr/bin/$dep" ] || [ -f "/usr/local/bin/$dep" ]; then
       echo -e "${GREEN}  ✓ $dep${NC}"
     else
-      echo -e "${RED}  ✗ $dep${NC}"
-      missing+=("$dep")
+      local installed=false
+      for bin in /usr/bin/* /usr/local/bin/*; do
+        if [ -f "$bin" ] && [[ "$(basename "$bin")" == "$dep"* ]]; then
+          installed=true
+          echo -e "${GREEN}  ✓ $dep${NC}"
+          break
+        fi
+      done
+      if [ "$installed" = false ]; then
+        echo -e "${RED}  ✗ $dep${NC}"
+        missing+=("$dep")
+      fi
     fi
   done
 
@@ -265,11 +347,37 @@ check_deps() {
           echo -e "${RED}Error installing ${pkg}${NC}"
         }
       done
-      echo -e "\n${GREEN}✓ Dependencias instaladas${NC}"
+      echo -e "\n${GREEN}✓ $(t "deps_ok")${NC}"
     fi
   else
     echo -e "\n${GREEN}$(t "deps_ok")${NC}"
   fi
+}
+
+do_update_system() {
+  show_banner
+  echo -e "${BOLD}${BLUE}  ┌─────────────────────────────────────┐${NC}"
+  echo -e "${BOLD}${BLUE}  │${NC}  ${WHITE}$(t "opt_update")${NC}                             ${BOLD}${BLUE}│${NC}"
+  echo -e "${BOLD}${BLUE}  └─────────────────────────────────────┘${NC}"
+  echo ""
+
+  detect_distro
+
+  if [ "$PKG_MANAGER" = "unknown" ]; then
+    echo -e "${RED}No se pudo detectar el gestor de paquetes.${NC}"
+    read -rp "Presiona Enter para continuar..."
+    return
+  fi
+
+  echo -e "${CYAN}$(t "updating_system")${NC}\n"
+  
+  start_spinner "Actualizando..."
+  $PKG_UPDATE
+  stop_spinner
+  
+  echo -e "${GREEN}✓ $(t "system_updated")${NC}"
+  echo ""
+  read -rp "Presiona Enter para continuar..."
 }
 
 spinner_pid=0
@@ -281,7 +389,7 @@ start_spinner() {
   (
     local i=0
     while true; do
-      printf "\r${DIM}%s ${spinner_chars[$i]} ${message}   ${NC}" "${spinner_chars[$i]}"
+      printf "\r${DIM}%s ${message}   ${NC}" "${spinner_chars[$i]}"
       i=$(( (i + 1) % ${#spinner_chars[@]} ))
       sleep 0.1
     done
@@ -295,41 +403,6 @@ stop_spinner() {
     spinner_pid=0
     tput cnorm
     printf "\r                                                                 \r"
-  fi
-}
-
-download_and_build() {
-  mkdir -p "$INSTALL_DIR"
-
-  if [ -d "$INSTALL_DIR/foxix" ]; then
-    rm -rf "$INSTALL_DIR/foxix"
-  fi
-
-  start_spinner "Descargando Foxix..."
-  if git clone --depth 1 "$REPO_URL" "$INSTALL_DIR/foxix" 2>/dev/null; then
-    sleep 0.5
-    stop_spinner
-    echo -e "${GREEN}✓ $(t "download_ok")${NC}"
-  else
-    stop_spinner
-    echo -e "${RED}Error downloading project${NC}"
-    exit 1
-  fi
-
-  start_spinner "Compilando Foxix..."
-  cd "$INSTALL_DIR/foxix"
-  
-  local compile_log=$(cargo build --release 2>&1)
-  
-  if [ -f "$INSTALL_DIR/foxix/target/release/foxix" ]; then
-    sleep 0.5
-    stop_spinner
-    echo -e "${GREEN}✓ $(t "compile_ok")${NC}"
-  else
-    stop_spinner
-    echo -e "${RED}Compilation failed${NC}"
-    echo "$compile_log" | tail -10
-    exit 1
   fi
 }
 
@@ -359,7 +432,12 @@ make_link() {
     sudo rm "$BIN_LINK"
   fi
 
-  sudo ln -s "$INSTALL_DIR/foxix/target/release/foxix" "$BIN_LINK"
+  local foxix_bin="$INSTALL_DIR/foxix/foxix"
+  if [ -f "$foxix_bin" ]; then
+    sudo ln -s "$foxix_bin" "$BIN_LINK"
+  elif [ -f "$INSTALL_DIR/foxix/target/release/foxix" ]; then
+    sudo ln -s "$INSTALL_DIR/foxix/target/release/foxix" "$BIN_LINK"
+  fi
 
   echo -e "${GREEN}$(t "link_ok")${NC}"
 }
@@ -371,9 +449,9 @@ do_install() {
   echo -e "${BOLD}${MAGENTA}  └─────────────────────────────────────┘${NC}"
   echo ""
 
-  if [ -f "$BIN_LINK" ]; then
+  if [ -L "$BIN_LINK" ]; then
     echo -e "${YELLOW}$(t "already_installed")${NC}"
-    echo -e "${DIM}Usa la opción 2 para reparar.${NC}"
+    echo -e "${DIM}Usa la opción 2 para reparar o actualizar.${NC}"
     read -rp "Presiona Enter para continuar..."
     return
   fi
@@ -381,13 +459,7 @@ do_install() {
   detect_distro
   check_deps
 
-  if ! command -v cargo &> /dev/null; then
-    echo -e "${RED}$(t "missing_rust")${NC}"
-    read -rp "Presiona Enter para continuar..."
-    return
-  fi
-
-  download_and_build
+  download_latest
   create_config
   make_link
 
@@ -423,10 +495,11 @@ do_repair() {
   detect_distro
   check_deps
 
-  cd "$INSTALL_DIR/foxix"
-  cargo build --release 2>&1 | tail -5
+  download_latest
 
-  chmod +x "$INSTALL_DIR/foxix/target/release/foxix"
+  if [ -f "$INSTALL_DIR/foxix/foxix" ]; then
+    chmod +x "$INSTALL_DIR/foxix/foxix"
+  fi
 
   if [ ! -L "$BIN_LINK" ]; then
     make_link
@@ -477,9 +550,10 @@ show_menu() {
   echo -e "  ${BOLD}${WHITE}$(t "select_opt")${NC}"
   echo ""
   echo -e "  ${CYAN}1)${NC} ${GREEN}$(t "opt_install")${NC}"
-  echo -e "  ${CYAN}2)${NC} ${YELLOW}$(t "opt_repair")${NC}"
-  echo -e "  ${CYAN}3)${NC} ${RED}$(t "opt_remove")${NC}"
-  echo -e "  ${CYAN}4)${NC} ${DIM}$(t "opt_exit")${NC}"
+  echo -e "  ${CYAN}2)${NC} ${BLUE}$(t "opt_update")${NC}"
+  echo -e "  ${CYAN}3)${NC} ${YELLOW}$(t "opt_repair")${NC}"
+  echo -e "  ${CYAN}4)${NC} ${RED}$(t "opt_remove")${NC}"
+  echo -e "  ${CYAN}5)${NC} ${DIM}$(t "opt_exit")${NC}"
   echo ""
   echo -ne "  ${BOLD}> ${NC}"
 }
@@ -496,7 +570,7 @@ select_language() {
   echo "  ╚═╝      ╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝"
   echo ""
   echo -e "${NC}"
-  echo -e "    ${DIM}https://github.com/jephersonRD/foxix-terminal${NC}"
+  echo -e "    ${DIM}$REPO_URL${NC}"
   echo ""
   echo -e "  ${WHITE}$(t "select_lang")${NC}"
   echo ""
@@ -528,9 +602,10 @@ main() {
     read -r option
     case $option in
       1) do_install ;;
-      2) do_repair ;;
-      3) do_remove ;;
-      4)
+      2) do_update_system ;;
+      3) do_repair ;;
+      4) do_remove ;;
+      5)
         echo ""
         echo -e "${GREEN}$(t "goodbye")${NC}"
         echo ""

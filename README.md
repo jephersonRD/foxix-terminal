@@ -89,7 +89,12 @@ Foxix está diseñado para ser el terminal más eficiente disponible en Linux. B
 curl -sSL https://raw.githubusercontent.com/jephersonRD/foxix-terminal/main/foxix-install.sh | bash
 ```
 
-Esto detectará tu distribución, instalará las dependencias necesarias, compilará Foxix y lo configurará.
+El instalador:
+- Detecta tu distribución automáticamente
+- Instala las dependencias necesarias (freetype2, wayland)
+- Descarga la última versión del binario desde GitHub Releases
+- Crea la configuración automáticamente
+- Opción de actualizar el sistema (pacman -Syu / apt update)
 
 ### 🛠️ Desde código fuente
 
