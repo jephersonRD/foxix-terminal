@@ -13,7 +13,7 @@
 
 # Foxix Terminal
 
-**Foxix** — Emulador de terminal ultra-rápido escrito en Rust 🦀  
+**Foxix** — Es una terminal ultra-rápido escrito en Rust 🦀  
 *A blazing-fast GPU-accelerated terminal emulator built with Rust and OpenGL*
 
 [![Rust](https://img.shields.io/badge/Rust-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
@@ -26,17 +26,17 @@
 
 ---
 
-> 💡 **Foxix** es un emulador de terminal de alto rendimiento para Linux — escrito completamente en Rust, con renderizado por GPU (OpenGL 4.6), sin dependencias de runtime y optimizado para entornos Wayland como Hyprland y Sway.
+> 💡 **Foxix** es una terminal de alto rendimiento para Linux — escrito completamente en Rust, con renderizado por GPU (OpenGL 4.6), sin dependencias de runtime y optimizado para entornos Wayland como Hyprland y Sway.
 
 ---
 
 ## ¿Qué es Foxix?
 
-**Foxix** es un terminal emulador moderno, ligero y rápido escrito en **Rust**, con aceleración GPU mediante **OpenGL 4.6**. Nació como alternativa minimalista a terminales como Kitty, Alacritty o WezTerm — consumiendo una fracción de la memoria RAM y arrancando hasta **10 veces más rápido**.
+**Foxix** es un terminal moderno, ligero y rápido escrito en **Rust**, con aceleración GPU mediante **OpenGL 4.6**. Nació como alternativa minimalista a terminales como Kitty, Alacritty o WezTerm — consumiendo una fracción de la memoria RAM y arrancando hasta **10 veces más rápido**.
 
 > *Fox* (zorro) + *ix* = velocidad + poder Unix
 
-Si buscas un **terminal rápido para Linux**, un **emulador de terminal en Rust**, o un reemplazo ligero para Kitty/Alacritty en **Hyprland o Wayland**, Foxix es para ti.
+Si buscas un **terminal rápido para Linux**, una terminal en Rust**, o un reemplazo ligero para Kitty/Alacritty en **Hyprland o Wayland**, Foxix es para ti.
 
 ---
 
@@ -169,7 +169,7 @@ Sí, Foxix está diseñado y optimizado específicamente para Wayland, incluyend
 **¿Puedo migrar mi config de Kitty a Foxix?**  
 La sintaxis de `foxix.conf` es compatible con el estilo de `kitty.conf`. La mayoría de opciones básicas son portables directamente.
 
-**¿Por qué Rust para un emulador de terminal?**  
+**¿Por qué Rust para una de terminal?**  
 Rust garantiza memoria segura sin garbage collector, lo que se traduce en bajo uso de RAM y tiempos de inicio mínimos — perfectos para un terminal de alto rendimiento.
 
 ---
