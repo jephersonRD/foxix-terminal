@@ -481,30 +481,37 @@ make_link() {
 install_desktop_entry() {
   echo -e "${CYAN}Instalando en menú de aplicaciones...${NC}"
   
-  local icon_dir="$HOME/.local/share/icons/hicolor/256x256/apps"
+  local icon_dir="$HOME/.local/share/icons/hicolor"
   local desktop_dir="$HOME/.local/share/applications"
   local desktop_file="$desktop_dir/foxix.desktop"
-  local icon_path="$icon_dir/foxix.png"
   
-  mkdir -p "$icon_dir"
+  mkdir -p "$icon_dir/256x256/apps"
+  mkdir -p "$icon_dir/48x48/apps"
+  mkdir -p "$icon_dir/32x32/apps"
+  mkdir -p "$icon_dir/22x22/apps"
   mkdir -p "$desktop_dir"
   
   local icon_sources=(
-    "$INSTALL_DIR/foxix/foxix/assets/logo/logo.png"
     "$INSTALL_DIR/foxix/assets/logo/logo.png"
+    "$INSTALL_DIR/foxix/foxix/assets/logo/logo.png"
     "$HOME/.local/foxix/foxix/foxix/assets/logo/logo.png"
     "$HOME/.local/foxix/foxix/assets/logo/logo.png"
   )
   
+  local icon_copied=false
   for src in "${icon_sources[@]}"; do
     if [ -f "$src" ]; then
-      cp "$src" "$icon_path"
+      cp "$src" "$icon_dir/256x256/apps/foxix.png"
+      cp "$src" "$icon_dir/48x48/apps/foxix.png"
+      cp "$src" "$icon_dir/32x32/apps/foxix.png"
+      cp "$src" "$icon_dir/22x22/apps/foxix.png"
+      icon_copied=true
       echo -e "${GREEN}  ✓ Icono copiado${NC}"
       break
     fi
   done
   
-  if [ ! -f "$icon_path" ]; then
+  if [ "$icon_copied" = false ]; then
     echo -e "${YELLOW}  Icono no encontrado${NC}"
   fi
   
@@ -516,7 +523,7 @@ Name=Foxix
 GenericName=Terminal
 Comment=Foxix Terminal - Emulador de terminal ultra-rápido escrito en Rust
 Exec=$BIN_LINK
-Icon=$icon_path
+Icon=foxix
 Terminal=false
 Type=Application
 Categories=System;TerminalEmulator;
@@ -530,8 +537,12 @@ EOF
 }
 
 remove_desktop_entry() {
+  echo -e "${CYAN}Eliminando acceso directo...${NC}"
   rm -f "$HOME/.local/share/applications/foxix.desktop"
   rm -f "$HOME/.local/share/icons/hicolor/256x256/apps/foxix.png"
+  rm -f "$HOME/.local/share/icons/hicolor/48x48/apps/foxix.png"
+  rm -f "$HOME/.local/share/icons/hicolor/32x32/apps/foxix.png"
+  rm -f "$HOME/.local/share/icons/hicolor/22x22/apps/foxix.png"
   update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 }
 
