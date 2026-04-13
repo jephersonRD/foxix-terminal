@@ -86,6 +86,8 @@ t() {
         "downloading_latest") echo "Descargando última versión..." ;;
         "release_not_found") echo "No se encontró el Release. Sube el binario a GitHub." ;;
         "extract_ok") echo "Binario extraído correctamente" ;;
+        "desktop_install") echo "Instalando en menú de aplicaciones..." ;;
+        "desktop_installed") echo "Aplicación instalada en menú" ;;
         *) echo "$key" ;;
       esac
       ;;
@@ -133,6 +135,8 @@ t() {
         "downloading_latest") echo "Downloading latest version..." ;;
         "release_not_found") echo "Release not found. Upload the binary to GitHub." ;;
         "extract_ok") echo "Binary extracted successfully" ;;
+        "desktop_install") echo "Installing application to menu..." ;;
+        "desktop_installed") echo "Application installed to menu" ;;
         *) echo "$key" ;;
       esac
       ;;
@@ -442,6 +446,52 @@ make_link() {
   echo -e "${GREEN}$(t "link_ok")${NC}"
 }
 
+install_desktop_entry() {
+  echo -e "${CYAN}Instalando en menú de aplicaciones...${NC}"
+  
+  local icon_dir="/usr/local/share/icons/hicolor/256x256/apps"
+  local desktop_dir="/usr/local/share/applications"
+  local desktop_file="$desktop_dir/foxix.desktop"
+  
+  sudo mkdir -p "$icon_dir"
+  sudo mkdir -p "$desktop_dir"
+  
+  if [ -f "$INSTALL_DIR/foxix/assets/logo/logo.png" ]; then
+    sudo cp "$INSTALL_DIR/foxix/assets/logo/logo.png" "$icon_dir/foxix.png"
+  elif [ -f "$INSTALL_DIR/foxix/logo.png" ]; then
+    sudo cp "$INSTALL_DIR/foxix/logo.png" "$icon_dir/foxix.png"
+  fi
+  
+  sudo rm -f "$desktop_file"
+  
+  local icon_path="/usr/local/share/icons/hicolor/256x256/apps/foxix.png"
+  
+  cat | sudo tee "$desktop_file" > /dev/null << EOF
+[Desktop Entry]
+Name=Foxix
+GenericName=Terminal
+Comment=Foxix Terminal - Emulador de terminal ultra-rápido escrito en Rust
+Exec=/usr/local/bin/foxix
+Icon=$icon_path
+Terminal=false
+Type=Application
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;command;bash;
+StartupNotify=true
+StartupWMClass=foxix-terminal
+EOF
+
+  sudo update-desktop-database "$desktop_dir" 2>/dev/null || true
+  
+  echo -e "${GREEN}✓ Aplicación instalada en menú${NC}"
+}
+
+remove_desktop_entry() {
+  sudo rm -f "/usr/local/share/applications/foxix.desktop"
+  sudo rm -f "/usr/local/share/icons/hicolor/256x256/apps/foxix.png"
+  sudo update-desktop-database "/usr/local/share/applications" 2>/dev/null || true
+}
+
 do_install() {
   show_banner
   echo -e "${BOLD}${MAGENTA}  ┌─────────────────────────────────────┐${NC}"
@@ -462,6 +512,7 @@ do_install() {
   download_latest
   create_config
   make_link
+  install_desktop_entry
 
   echo ""
   echo -e "${GREEN}${BOLD}  ╔═══════════════════════════════════════╗${NC}"
@@ -540,6 +591,8 @@ do_remove() {
       echo -e "${RED}$(t "uninstall_failed")${NC}"
     }
   fi
+
+  remove_desktop_entry
 
   echo -e "${GREEN}$(t "remove_ok")${NC}"
   read -rp "Presiona Enter para continuar..."
