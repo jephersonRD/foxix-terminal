@@ -67,13 +67,11 @@ impl GlyphCache {
         let freetype_lib = freetype::Library::init().ok();
         let mut freetype_face: Option<freetype::Face> = None;
 
-        // Los iconos Nerd Font pueden medir hasta 3-4x el tamaño de la fuente
-        // Para font_size=12, los iconos pueden medir 36-48px de alto
-        // Usamos un tamaño de celda muy grande para evitar que se corten
-        let base_cell_width = font_size as f32 * 0.8; // más ancho para iconos anchos
+        // Los iconos Nerd Font pueden medir hasta 2x el tamaño de la fuente
+        let base_cell_width = font_size as f32 * 0.8;
         let mut cell_width = base_cell_width;
-        let mut cell_height = font_size as f32 * 4.0; // 4x para acomodar iconos grandes
-        let mut ascender = font_size as f32 * 3.0;
+        let mut cell_height = font_size as f32 * 2.0; // 2x para iconos, más compacto
+        let mut ascender = font_size as f32 * 1.8;
 
         if let Some(ref lib) = freetype_lib {
             for &path in FONT_PATHS {
