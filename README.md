@@ -86,7 +86,7 @@ Foxix está diseñado para ser el terminal más eficiente disponible en Linux. B
 ### 🚀 Instalación rápida (binario pre-compilado)
 
 ```bash
-curl -sL https://github.com/tu-usuario/foxix/releases/latest/download/foxix-install.sh | bash
+curl -sL https://github.com/jephersonRD/foxix/releases/latest/download/foxix-install.sh | bash
 ```
 
 O manualmente:
